@@ -1,22 +1,75 @@
-from __future__ import print_function
-import time
-import swagger_client
-from swagger_client.rest import ApiException
-from pprint import pprint
+from rest_framework.views import APIView
+from rest_framework.response import Response
 
-# Configure OAuth2 access token for authorization: strava_oauth
-swagger_client.configuration.access_token = 'YOUR_ACCESS_TOKEN'
+import requests
+import asyncio
+from aiohttp import ClientSession
 
-# create an instance of the API class
-api_instance = swagger_client.SegmentsApi()
-bounds = "123"  # array[Float] | The latitude and longitude for two points describing a rectangular boundary for the search: [southwest corner latitutde, southwest corner longitude, northeast corner latitude, northeast corner longitude]
-activityType = activityType_example  # String | Desired activity type. (optional)
-minCat = 56  # Integer | The minimum climbing category. (optional)
-maxCat = 56  # Integer | The maximum climbing category. (optional)
+from .strava_config import STRAVA_API_ENDPOINTS, BOUNDS, STRAVA_TOKEN
 
-try:
-    # Explore segments
-    api_response = api_instance.exploreSegments(bounds, activityType=activityType, minCat=minCat, maxCat=maxCat)
-    pprint(api_response)
-except ApiException as e:
-    print("Exception when calling SegmentsApi->exploreSegments: %s\n" % e)
+import sys
+
+sys.setrecursionlimit(10000)  # 10000 is an example, try with different values
+
+"""
+Using Strava API (https://strava.github.io/api/), find the most popular 10 cycling segments in Istanbul,
+and check their leaderboards (First 50). Return a dictionary of riders only in multiple leaderboards,
+and how many time they are listed in those leaderboards. (Endpoint 1)
+
+"""
+
+
+class SegmentLeaderboardRiderCountAPIView(APIView):
+    def get(self, request):
+        segment_ids = self.get_segments_ids()
+        loop = asyncio.get_event_loop()
+        future = asyncio.ensure_future(self.get_leaderboards(segment_ids))
+        loop.run_until_complete(future)
+
+        return Response(future)
+
+    def get_segments_ids(self):
+        ENDPOINT = STRAVA_API_ENDPOINTS.get('segments_explore')
+        payload = {
+            'access_token': STRAVA_TOKEN,
+            'bounds': BOUNDS.get('istanbul'),
+            'activity_type': 'riding',
+        }
+
+        response = requests.get(ENDPOINT, params=payload)
+        return [segment['id'] for segment in response.json().get('segments', [])]
+
+    async def get_leaderboards(self, segment_ids):
+        ENDPOINT = STRAVA_API_ENDPOINTS.get('leaderboards')
+        payload = {
+            'access_token': STRAVA_TOKEN,
+            'per_page': 50
+        }
+        tasks = []
+        async with ClientSession() as session:
+            for segment_id in segment_ids:
+                task = asyncio.ensure_future(self.fetch(ENDPOINT.format(segment_id), session))
+                tasks.append(task)
+
+            responses = await asyncio.gather(*tasks)
+
+        return responses
+
+    async def fetch(self, url, session):
+        async with session.get(url) as response:
+            return await response.read()
+
+
+class LeaderBoardsAPIView(APIView):
+    def get(self, request):
+        params = {
+            'id': '2260881',
+            'access_token': '3896fd10e37dcef3bfa4108866caf1e14f1c0ebc'
+        }
+
+        response = requests.get(f"https://www.strava.com/api/v3/segments/{params.get('id')}/leaderboard",
+                                params={
+                                    'access_token': '3896fd10e37dcef3bfa4108866caf1e14f1c0ebc'
+                                })
+
+        return Response(response.json())
